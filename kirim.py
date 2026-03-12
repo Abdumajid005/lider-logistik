@@ -13,115 +13,80 @@ with st.sidebar:
     kurs_bank = st.number_input("Bank kurs (rastamojka)", value=12850)
     sertifikat_baza = st.number_input("1 model sertifikat narxi (so'm)", value=8500000)
 
-# ---------------- FILE LOAD & CALCULATION ----------------
 if uploaded_file:
     if uploaded_file.name.endswith("csv"):
-        original_df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file)
     else:
-        original_df = pd.read_excel(uploaded_file)
+        df = pd.read_excel(uploaded_file)
 
-    original_df.columns = original_df.columns.str.strip()
+    df.columns = df.columns.str.strip()
 
-    # Kerakli ustunlar bazada bormi tekshirish
+    # Kerakli ustunlarni tekshirish
     required_columns = ["№","Model","Soni","Narxi","Brutto","Netto","Rastamojka","Qo'qon","Samarqand","Xorazm"]
     for col in required_columns:
-        if col not in original_df.columns:
-            original_df[col] = 0.0
+        if col not in df.columns:
+            df[col] = 0.0
 
-    # --- JADVALNI CHIQARISH VA TAHRIRLASH ---
-    st.info("💡 'Rastamojka' ustunini to'ldiring, qolgan ustunlar avtomat hisoblanadi.")
-
-    # 1. Avval foydalanuvchi kiritgan qiymatlarni qabul qilamiz
-    edited_df = st.data_editor(
-        original_df,
+    # 1. ASOSIY JADVAL (FAQAT SHU BITTA EKRANDA TURADI)
+    st.subheader("📝 Ma'lumotlarni tahrirlash")
+    
+    # data_editor natijasini to'g'ridan-to'g'ri df ga olamiz
+    df = st.data_editor(
+        df,
         use_container_width=True,
         hide_index=True,
         column_config={
             "Rastamojka": st.column_config.NumberColumn("Rastamojka (so'm)", format="%d"),
+            "Narxi": st.column_config.NumberColumn("Narxi ($)", format="%.2f"),
         },
-        disabled=[c for c in original_df.columns if c != "Rastamojka"]
+        # Faqat kerakli ustunlarni tahrirlashga ruxsat (masalan, Rastamojka va Narxi)
+        disabled=[col for col in df.columns if col not in ["Rastamojka", "Narxi"]]
     )
 
-    # 2. ENDI FAQAT SHU BITTA JADVAL ASOSIDA HAMMA FORMULALARNI HISOBLAYMIZ
-    df = edited_df.copy()
-
+    # ---------------- HISOB-KITOB (ORQA FONDA) ----------------
+    # Bu hisoblar jadval ko'rinmaydi, lekin Excel va Metrikalar uchun ishlaydi
     df["Jami narxi"] = df["Narxi"] * df["Soni"]
     df["Jami brutto"] = df["Brutto"] * df["Soni"]
-    df["Jami netto"] = df["Netto"] * df["Soni"]
-
+    
     jami_brutto = df["Jami brutto"].sum()
     jami_narx = df["Jami narxi"].sum()
-
+    
     # Yo'l kira
-    if jami_brutto > 0:
-        df["Yo'l kiro"] = df["Jami brutto"] * yol_kira / jami_brutto
-    else:
-        df["Yo'l kiro"] = 0
-    df["Dona yo'l kiro"] = df["Yo'l kiro"] / df["Soni"]
-
+    df["Yo'l kiro"] = (df["Jami brutto"] * yol_kira / jami_brutto) if jami_brutto > 0 else 0
     # Rastamojka $
     df["Rastamojka $"] = df["Rastamojka"] / kurs_bank
-    df["Dona rastamojka"] = df["Rastamojka"] / df["Soni"]
-    df["Dona rastamojka $"] = df["Rastamojka $"] / df["Soni"]
-
     # Sertifikat
     model_turlari = df["Model"].nunique()
     jami_sertifikat = (sertifikat_baza * model_turlari) / kurs_naqd
-    if jami_narx > 0:
-        df["Sertifikat harajati"] = (df["Jami narxi"] * jami_sertifikat / jami_narx)
-    else:
-        df["Sertifikat harajati"] = 0
-    df["Dona sertifikat harajati"] = df["Sertifikat harajati"] / df["Soni"]
-
-    # Umumiy harajat va Kirim
-    df["Harajat"] = df["Yo'l kiro"] + df["Rastamojka $"] + df["Sertifikat harajati"]
-    df["Dona harajat"] = df["Harajat"] / df["Soni"]
+    df["Sertifikat harajati"] = (df["Jami narxi"] * jami_sertifikat / jami_narx) if jami_narx > 0 else 0
+    
+    # Kirim hisobi
+    df["Dona harajat"] = (df["Yo'l kiro"] + df["Rastamojka $"] + df["Sertifikat harajati"]) / df["Soni"]
     df["Kirim"] = df["Narxi"] + df["Dona harajat"]
     df["Jami kirim"] = df["Kirim"] * df["Soni"]
 
-    # Hududlar
-    df["Jami Qo'qon"] = df["Qo'qon"] * df["Kirim"]
-    df["Jami Samarqand"] = df["Samarqand"] * df["Kirim"]
-    df["Jami Xorazm"] = df["Xorazm"] * df["Kirim"]
-
-    # 3. METRIKALAR (Jadval tagida yangilanib turadi)
+    # 2. NATIJALARNI METRIKALARDA KO'RSATAMIZ
     st.divider()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Jami Brutto", f"{jami_brutto:,.2f}")
-    c2.metric("Modellar", model_turlari)
-    c3.metric("Sertifikat ($)", f"{jami_sertifikat:,.2f}")
-    c4.metric("Jami Kirim ($)", f"{df['Jami kirim'].sum():,.2f}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Jami Brutto", f"{jami_brutto:,.2f} kg")
+    m2.metric("Modellar soni", model_turlari)
+    m3.metric("Jami Sertifikat ($)", f"{jami_sertifikat:,.2f}")
+    m4.metric("JAMI KIRIM ($)", f"{df['Jami kirim'].sum():,.2f}")
 
-    # 4. FAQAT BITTA JADVAL KO'RINISHI UCHUN NATIJANI QAYTA CHIQARAMIZ
-    # Lekin bu yerda 'final_df' tartibini beramiz
-    columns_order = [
-        "№", "Model", "Soni", "Narxi", "Jami narxi", 
-        "Brutto", "Jami brutto", "Yo'l kiro", "Dona yo'l kiro", 
-        "Rastamojka", "Rastamojka $", "Dona rastamojka $", 
-        "Sertifikat harajati", "Harajat", "Dona harajat", 
-        "Kirim", "Jami kirim", "Qo'qon", "Jami Qo'qon", 
-        "Samarqand", "Jami Samarqand", "Xorazm", "Jami Xorazm"
-    ]
-    
-    # Mavjud bo'lmagan ustunlarni to'ldirish
-    for col in columns_order:
-        if col not in df.columns: df[col] = 0
-
-    st.subheader("📊 Hisoblangan Yakuniy Jadval")
-    # BU YERDA FAQAT NATIJANI KO'RSATAMIZ (BITTA JADVAL BO'LISHI UCHUN)
-    st.dataframe(df[columns_order].style.format(precision=2), use_container_width=True)
-
-    # Excelga yuklash
+    # 3. EXCELNI TAYYORLASH (HAMMA USTUNLAR BILAN)
+    # Bu yerda hamma hisoblangan ustunlarni tartiblab Excelga chiqaramiz
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df[columns_order].to_excel(writer, index=False, sheet_name="Kirim")
+        df.to_excel(writer, index=False, sheet_name="Hisob-kitob")
+    
+    st.success("✅ Hisoblash tayyor. Pastdagi tugma orqali hamma ustunlari bor Excelni yuklab oling.")
     
     st.download_button(
-        "📥 Tayyor Excelni yuklab olish",
+        "📥 To'liq hisoblangan Excelni yuklab olish",
         data=output.getvalue(),
-        file_name="lider_hisob.xlsx",
+        file_name="yuk_hisobi_yakuniy.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 else:
-    st.info("Iltimos, Excel fayl yuklang.")
+    st.info("Iltimos, Excel faylni yuklang.")
