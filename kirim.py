@@ -3,6 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Lider Logistik", layout="wide")
+
 st.title("📦 Yuk Kirimi Hisoblash")
 
 # ---------------- SIDEBAR ----------------
@@ -13,80 +14,133 @@ with st.sidebar:
     kurs_bank = st.number_input("Bank kurs (rastamojka)", value=12850)
     sertifikat_baza = st.number_input("1 model sertifikat narxi (so'm)", value=8500000)
 
+# ---------------- SESSION STATE (Ma'lumotlarni saqlash uchun) ----------------
 if uploaded_file:
-    if uploaded_file.name.endswith("csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    if "df_data" not in st.session_state:
+        if uploaded_file.name.endswith("csv"):
+            df_init = pd.read_csv(uploaded_file)
+        else:
+            df_init = pd.read_excel(uploaded_file)
+        
+        df_init.columns = df_init.columns.str.strip()
+        
+        # Kerakli ustunlar yo'q bo'lsa yaratish
+        required_cols = ["№","Model","Soni","Narxi","Brutto","Netto","Rastamojka","Qo'qon","Samarqand","Xorazm"]
+        for col in required_cols:
+            if col not in df_init.columns:
+                df_init[col] = 0.0
+        
+        st.session_state.df_data = df_init
 
-    df.columns = df.columns.str.strip()
-
-    # Kerakli ustunlarni tekshirish
-    required_columns = ["№","Model","Soni","Narxi","Brutto","Netto","Rastamojka","Qo'qon","Samarqand","Xorazm"]
-    for col in required_columns:
-        if col not in df.columns:
-            df[col] = 0.0
-
-    # 1. ASOSIY JADVAL (FAQAT SHU BITTA EKRANDA TURADI)
-    st.subheader("📝 Ma'lumotlarni tahrirlash")
+    # 1. FOYDALANUVCHI TAHRIRLAYDIGAN JADVAL
+    st.info("💡 'Rastamojka' ustunini tahrirlang, qolganlari avtomat hisoblanadi.")
     
-    # data_editor natijasini to'g'ridan-to'g'ri df ga olamiz
-    df = st.data_editor(
-        df,
+    edited_df = st.data_editor(
+        st.session_state.df_data,
         use_container_width=True,
         hide_index=True,
         column_config={
             "Rastamojka": st.column_config.NumberColumn("Rastamojka (so'm)", format="%d"),
-            "Narxi": st.column_config.NumberColumn("Narxi ($)", format="%.2f"),
         },
-        # Faqat kerakli ustunlarni tahrirlashga ruxsat (masalan, Rastamojka va Narxi)
-        disabled=[col for col in df.columns if col not in ["Rastamojka", "Narxi"]]
+        disabled=[col for col in st.session_state.df_data.columns if col != "Rastamojka"]
     )
+    
+    # Tahrirlangan ma'lumotni saqlaymiz
+    df = edited_df.copy()
 
-    # ---------------- HISOB-KITOB (ORQA FONDA) ----------------
-    # Bu hisoblar jadval ko'rinmaydi, lekin Excel va Metrikalar uchun ishlaydi
+    # ---------------- BARCHA FORMULALAR (ESKI TARTIBDA) ----------------
+    
+    # Asosiy hisoblar
     df["Jami narxi"] = df["Narxi"] * df["Soni"]
     df["Jami brutto"] = df["Brutto"] * df["Soni"]
-    
+    df["Jami netto"] = df["Netto"] * df["Soni"]
+
     jami_brutto = df["Jami brutto"].sum()
     jami_narx = df["Jami narxi"].sum()
-    
+
     # Yo'l kira
-    df["Yo'l kiro"] = (df["Jami brutto"] * yol_kira / jami_brutto) if jami_brutto > 0 else 0
-    # Rastamojka $
+    if jami_brutto > 0:
+        df["Yo'l kiro"] = df["Jami brutto"] * yol_kira / jami_brutto
+    else:
+        df["Yo'l kiro"] = 0
+    df["Dona yo'l kiro"] = df["Yo'l kiro"] / df["Soni"]
+
+    # Rastamojka (Bank kursi bilan)
     df["Rastamojka $"] = df["Rastamojka"] / kurs_bank
+    df["Dona rastamojka"] = df["Rastamojka"] / df["Soni"]
+    df["Dona rastamojka $"] = df["Rastamojka $"] / df["Soni"]
+
     # Sertifikat
     model_turlari = df["Model"].nunique()
-    jami_sertifikat = (sertifikat_baza * model_turlari) / kurs_naqd
-    df["Sertifikat harajati"] = (df["Jami narxi"] * jami_sertifikat / jami_narx) if jami_narx > 0 else 0
-    
-    # Kirim hisobi
-    df["Dona harajat"] = (df["Yo'l kiro"] + df["Rastamojka $"] + df["Sertifikat harajati"]) / df["Soni"]
+    jami_sertifikat_dollarda = (sertifikat_baza * model_turlari) / kurs_naqd
+
+    if jami_narx > 0:
+        df["Sertifikat harajati"] = (df["Jami narxi"] * jami_sertifikat_dollarda / jami_narx)
+    else:
+        df["Sertifikat harajati"] = 0
+    df["Dona sertifikat harajati"] = df["Sertifikat harajati"] / df["Soni"]
+
+    # Umumiy harajat
+    df["Harajat"] = df["Yo'l kiro"] + df["Rastamojka $"] + df["Sertifikat harajati"]
+    df["Dona harajat"] = df["Harajat"] / df["Soni"]
+
+    # Kirim
     df["Kirim"] = df["Narxi"] + df["Dona harajat"]
     df["Jami kirim"] = df["Kirim"] * df["Soni"]
 
-    # 2. NATIJALARNI METRIKALARDA KO'RSATAMIZ
-    st.divider()
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Jami Brutto", f"{jami_brutto:,.2f} kg")
-    m2.metric("Modellar soni", model_turlari)
-    m3.metric("Jami Sertifikat ($)", f"{jami_sertifikat:,.2f}")
-    m4.metric("JAMI KIRIM ($)", f"{df['Jami kirim'].sum():,.2f}")
+    # Hududlar
+    df["Jami Qo'qon"] = df["Qo'qon"] * df["Kirim"]
+    df["Jami Samarqand"] = df["Samarqand"] * df["Kirim"]
+    df["Jami Xorazm"] = df["Xorazm"] * df["Kirim"]
 
-    # 3. EXCELNI TAYYORLASH (HAMMA USTUNLAR BILAN)
-    # Bu yerda hamma hisoblangan ustunlarni tartiblab Excelga chiqaramiz
+    # Qo'shimcha ustunlar (Chiqim A, B, C...)
+    extra_cols = ["Chiqim A", "Chiqim B,C", "Darian narxi", "Ustama"]
+    for col in extra_cols:
+        if col not in df.columns:
+            df[col] = ""
+
+    # ---------------- USTUNLAR TARTIBI (SIZ AYTGAN TARTIB) ----------------
+    columns_order = [
+        "№", "Model", "Soni", "Narxi", "Jami narxi", 
+        "Brutto", "Jami brutto", "Netto", "Jami netto", 
+        "Yo'l kiro", "Dona yo'l kiro", "Rastamojka", 
+        "Dona rastamojka", "Rastamojka $", "Dona rastamojka $", 
+        "Sertifikat harajati", "Dona sertifikat harajati", 
+        "Harajat", "Dona harajat", "Kirim", "Jami kirim", 
+        "Chiqim A", "Chiqim B,C", "Darian narxi", "Ustama", 
+        "Qo'qon", "Jami Qo'qon", "Samarqand", "Jami Samarqand", 
+        "Xorazm", "Jami Xorazm"
+    ]
+
+    # Yakuniy jadvalni tayyorlash
+    for col in columns_order:
+        if col not in df.columns:
+            df[col] = ""
+            
+    final_df = df[columns_order]
+
+    # ---------------- NATIJA VA EXPORT ----------------
+    
+    st.divider()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Jami Brutto", f"{jami_brutto:,.2f}")
+    c2.metric("Modellar soni", model_turlari)
+    c3.metric("Jami Sertifikat ($)", f"{jami_sertifikat_dollarda:,.2f}")
+    c4.metric("Jami Kirim ($)", f"{df['Jami kirim'].sum():,.2f}")
+
+    st.subheader("📊 Hisob-kitob natijalari (31 ta ustun)")
+    st.dataframe(final_df.style.format(precision=2, subset=final_df.select_dtypes(include='number').columns), use_container_width=True)
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Hisob-kitob")
-    
-    st.success("✅ Hisoblash tayyor. Pastdagi tugma orqali hamma ustunlari bor Excelni yuklab oling.")
-    
+        final_df.to_excel(writer, index=False, sheet_name="Kirim")
+
     st.download_button(
-        "📥 To'liq hisoblangan Excelni yuklab olish",
+        "📥 Excel yuklab olish",
         data=output.getvalue(),
-        file_name="yuk_hisobi_yakuniy.xlsx",
+        file_name="lider_logistik_yakuniy.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 else:
-    st.info("Iltimos, Excel faylni yuklang.")
+    st.info("Excel fayl yuklang.")
